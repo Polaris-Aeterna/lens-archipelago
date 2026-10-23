@@ -200,11 +200,14 @@ python3 -m http.server 8000
 
 然后打开 <http://localhost:8000>。`#map` 是群岛地图，`#codex` 是光谱图鉴，`#l01` 到 `#l11` 直接进入对应的透镜。
 
+提交改动前运行 `python3 tools/stamp.py`。它给每个脚本和音频的地址加上内容指纹，并在页面里写入版本号：浏览器（包括微信内置浏览器）不会把新旧文件混在一起，已经打开的旧页面也会自己切到新版本，玩到一半的会看到“刷新”提示，进度不受影响。
+
 ```text
 lens-archipelago/
 ├── index.html      页面外壳与全部样式
 ├── engine.js       引擎：开场、群岛地图、知识之桥、图鉴、镜灵、配乐与音效、关卡 API
 ├── audio/          十三首循环配乐与循环点清单（tracks.json）
+├── tools/stamp.py  发布前给文件加版本指纹
 ├── finale.js       终章：白光汇合、纽拉特之船、带走的问题
 ├── levels/         十一面透镜，每面一个文件（l01.js … l11.js）
 └── media/          宣传片、截图与 README 素材

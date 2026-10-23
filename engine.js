@@ -64,6 +64,10 @@
   /* ------------------------------------------------------------------ state */
   const levels = new Map();
   const VOL = { music: 0.8, sfx: 0.8 };   // default sound-panel levels
+  // build stamps written by tools/stamp.py (absent from unstamped builds, which then skip versioning)
+  const pageMeta = n => { const m = document.querySelector(`meta[name="${n}"]`); return m ? m.content : ''; };
+  const BUILD = pageMeta('lens-build'), AUDIO_V = pageMeta('lens-audio');
+  const audioUrl = f => 'audio/' + f + (AUDIO_V ? '?v=' + AUDIO_V : '');
   let state = load();
   const reduced = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
   let current = null; // {id, root, scope, cleanup}
@@ -170,7 +174,7 @@
   const Music = {
     want: null, cur: null, cache: {}, manifest: null,
     tracks() {
-      if (!this.manifest) this.manifest = fetch('audio/tracks.json').then(r => (r.ok ? r.json() : {})).catch(() => ({}));
+      if (!this.manifest) this.manifest = fetch(audioUrl('tracks.json')).then(r => (r.ok ? r.json() : {})).catch(() => ({}));
       return this.manifest;
     },
     load(id) {
@@ -178,7 +182,7 @@
       const p = (async () => {
         const t = (await this.tracks())[id];
         if (!t || !Sound.ctx) return null;
-        const res = await fetch('audio/' + t.file);
+        const res = await fetch(audioUrl(t.file));
         if (!res.ok) return null;
         const ab = await res.arrayBuffer();
         const buf = await new Promise((ok, bad) => { const r = Sound.ctx.decodeAudioData(ab, ok, bad); if (r && r.then) r.then(ok, bad); });
@@ -387,6 +391,30 @@
   }
   document.addEventListener('pointerdown', e => { if (volEl && !volEl.contains(e.target) && !e.target.closest('.hbtn.snd')) closeVol(); }, true);
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && volEl) closeVol(true); });
+
+  /* ------------------------------------------------------------------ updates: move to a newer build when one is online */
+  let checkedAt = 0, offered = false, interacted = false;
+  async function checkUpdate() {
+    if (!BUILD || offered || Date.now() - checkedAt < 5 * 60e3) return;
+    checkedAt = Date.now();
+    let next = null;
+    try {
+      const html = await (await fetch(location.pathname + '?check=' + Date.now(), { cache: 'no-store' })).text();
+      const m = html.match(/<meta name="lens-build" content="([0-9a-f]+)">/); next = m && m[1];
+    } catch (e) { return; }   // offline: ask again later
+    if (!next || next === BUILD) return;
+    // a fresh query string is a URL no cache has seen; progress lives in localStorage and carries over
+    const url = location.pathname + '?v=' + next + location.hash;
+    if (new URLSearchParams(location.search).get('v') === next) return;   // already asked for it; the server is still catching up
+    if (!interacted) { location.replace(url); return; }                    // nothing under way yet, so just move
+    offered = true;
+    const t = el('div', { class: 'toast update', style: '--h:42', role: 'status' },
+      el('div', null, el('div', { class: 't1', text: 'NEW VERSION' }), el('div', { class: 't2', text: '透镜群岛更新了' })),
+      el('button', { class: 'go', type: 'button', text: '刷新', onclick: () => location.replace(url) }),
+      el('button', { class: 'later', type: 'button', 'aria-label': '稍后', html: '&times;', onclick: () => t.remove() }));
+    toasts.append(t);
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
 
   /* ------------------------------------------------------------------ navigation */
   function setHash(h) { try { history.replaceState(null, '', '#' + h); } catch (e) { /* ignore */ } }
@@ -629,7 +657,7 @@
 
   /* ------------------------------------------------------------------ screens: map */
   function showMap(justDone) {
-    teardown(); hudMode = 'map'; hudLevel = null; renderHud(); setHash('map'); Music.play('map');
+    teardown(); hudMode = 'map'; hudLevel = null; renderHud(); setHash('map'); Music.play('map'); checkUpdate();
     const scr = el('div', { class: 'screen map-screen' });
     const wrap = el('div', { class: 'map-wrap' });
     scr.append(wrap); stage.append(scr);
@@ -810,12 +838,13 @@
     Narr.build(); Sky.init();
     const h = (location.hash || '').slice(1);
     // first user gesture unlocks audio
-    const unlock = () => { if (state.sound) Sound.apply(); removeEventListener('pointerdown', unlock); removeEventListener('keydown', unlock); };
+    const unlock = () => { interacted = true; if (state.sound) Sound.apply(); removeEventListener('pointerdown', unlock); removeEventListener('keydown', unlock); };
     addEventListener('pointerdown', unlock); addEventListener('keydown', unlock);
     if (levels.has(h) && h !== 'fin') enterLevel(h);
     else if (h === 'map') showMap();
     else if (h === 'codex') showCodex();
     else showTitle();
+    checkUpdate();
   }
   function reset() { state = { v: 1, done: {}, cards: {}, sound: state.sound, vol: state.vol, intro: false }; save(); showTitle(); }
 

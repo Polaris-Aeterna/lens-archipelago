@@ -2,6 +2,8 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<meta name="lens-build" content="4679dfcbac">
+<meta name="lens-audio" content="47e51a762c">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="description" content="你是一束白光。穿过十一面透镜，被语言、逻辑、价值与物理一次次折射，最后重新汇合。一个关于知识的互动旅程。">
 <meta name="theme-color" content="#05080F">
@@ -192,6 +194,10 @@ button{font:inherit;color:inherit}
 .toast .t1{font-size:11px;color:var(--dim);font-family:var(--f-mono);letter-spacing:.12em}
 .toast .t2{font-family:var(--f-display);font-size:18px;line-height:1.1}
 .toast.out{animation:tout .4s ease both}
+.toast.update{pointer-events:auto;padding:10px 10px 10px 16px}
+.toast .go{height:32px;padding:0 14px;border-radius:999px;border:0;background:hsl(var(--h) 85% 64%);color:var(--void);font-size:13px;cursor:pointer;margin-left:6px}
+.toast .later{width:28px;height:28px;border-radius:50%;border:0;background:none;color:var(--faint);font-size:18px;line-height:1;cursor:pointer}
+.toast .later:hover{color:var(--text)}
 @keyframes tin{from{transform:translateX(30px);opacity:0}to{transform:none;opacity:1}}
 @keyframes tout{to{transform:translateX(30px);opacity:0}}
 
@@ -236,19 +242,19 @@ button{font:inherit;color:inherit}
 <div id="overlay" class="gutter" hidden></div>
 <div id="toasts"></div>
 
-<script src="engine.js"></script>
-<script src="levels/l01.js"></script>
-<script src="levels/l02.js"></script>
-<script src="levels/l03.js"></script>
-<script src="levels/l04.js"></script>
-<script src="levels/l05.js"></script>
-<script src="levels/l06.js"></script>
-<script src="levels/l07.js"></script>
-<script src="levels/l08.js"></script>
-<script src="levels/l09.js"></script>
-<script src="levels/l10.js"></script>
-<script src="levels/l11.js"></script>
-<script src="finale.js"></script>
+<script src="engine.js?v=027fa45399"></script>
+<script src="levels/l01.js?v=b8cd7b1760"></script>
+<script src="levels/l02.js?v=122e060ef5"></script>
+<script src="levels/l03.js?v=8757e63141"></script>
+<script src="levels/l04.js?v=aca4743559"></script>
+<script src="levels/l05.js?v=8a8b95fcf1"></script>
+<script src="levels/l06.js?v=0d34797522"></script>
+<script src="levels/l07.js?v=8ad38684d7"></script>
+<script src="levels/l08.js?v=45a6ed2ff5"></script>
+<script src="levels/l09.js?v=38155d8199"></script>
+<script src="levels/l10.js?v=cbb4eddcb6"></script>
+<script src="levels/l11.js?v=8d935665f1"></script>
+<script src="finale.js?v=8493604d66"></script>
 <script>Lens.boot();</script>
 
 </body>
