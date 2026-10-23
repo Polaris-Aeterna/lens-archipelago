@@ -63,6 +63,7 @@
 
   /* ------------------------------------------------------------------ state */
   const levels = new Map();
+  const VOL = { music: 0.8, sfx: 0.8 };   // default sound-panel levels
   let state = load();
   const reduced = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
   let current = null; // {id, root, scope, cleanup}
@@ -71,9 +72,9 @@
   function load() {
     try {
       const s = JSON.parse(localStorage.getItem(KEY) || 'null');
-      if (s && s.v === 1) return Object.assign({ done: {}, cards: {}, sound: true, intro: false }, s);
+      if (s && s.v === 1) return Object.assign({ done: {}, cards: {}, sound: true, intro: false }, s, { vol: Object.assign({}, VOL, s.vol) });
     } catch (e) { /* storage unavailable */ }
-    return { v: 1, done: {}, cards: {}, sound: true, intro: false };
+    return { v: 1, done: {}, cards: {}, sound: true, intro: false, vol: Object.assign({}, VOL) };
   }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignore */ } }
 
@@ -110,49 +111,49 @@
 
   /* ------------------------------------------------------------------ sound */
   const Sound = {
-    ctx: null, master: null, oscs: [], filter: null,
+    ctx: null, master: null, musicBus: null, sfxBus: null, ducked: false,
     init() {
       if (this.ctx) return;
       const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
       try { this.ctx = new AC(); } catch (e) { return; }
       const c = this.ctx;
       this.master = c.createGain(); this.master.gain.value = 0; this.master.connect(c.destination);
-      const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 700; f.Q.value = 0.7; this.filter = f;
-      const pad = c.createGain(); pad.gain.value = 0.028; f.connect(pad); pad.connect(this.master);
-      this.oscs = [['triangle', 1], ['sine', 1.5], ['triangle', 2.004]].map(([type, r]) => { const o = c.createOscillator(); o.type = type; o._r = r; o.connect(f); o.start(); return o; });
-      const lfo = c.createOscillator(); lfo.frequency.value = 0.045; const lg = c.createGain(); lg.gain.value = 260; lfo.connect(lg); lg.connect(f.frequency); lfo.start();
-      this.root(0);
+      this.musicBus = c.createGain(); this.sfxBus = c.createGain(); this.musicBus.connect(this.master); this.sfxBus.connect(this.master);
+      this.mix(0.01);
     },
-    set(on) {
-      state.sound = on; save();
-      if (on) { this.init(); if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); this.ramp(0.9); } else this.ramp(0);
-      renderHud();
+    // slider position -> gain on a squared (roughly perceptual) curve; the default 80% reproduces the original mix
+    mix(tc) {
+      if (!this.ctx) return;
+      const t = this.ctx.currentTime, v = state.vol;
+      const to = (p, x) => { p.cancelScheduledValues(t); p.setTargetAtTime(x, t, tc); };
+      to(this.musicBus.gain, 1.2 * v.music * v.music * (this.ducked ? 0.6 : 1));
+      to(this.sfxBus.gain, 1.4 * v.sfx * v.sfx);
+    },
+    set(on) { state.sound = on; save(); this.apply(); renderHud(); syncVol(); },
+    apply() {
+      if (state.sound) { this.init(); if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); this.ramp(1); Music.kick(); }
+      else { this.ramp(0); setTimeout(() => { if (!state.sound && this.ctx) this.ctx.suspend(); }, 1600); }
     },
     ramp(v) { if (!this.ctx) return; const t = this.ctx.currentTime; this.master.gain.cancelScheduledValues(t); this.master.gain.setTargetAtTime(v, t, 0.4); },
-    root(n) {
-      if (!this.ctx) return;
-      const scale = [110, 123.47, 130.81, 146.83, 164.81, 174.61, 196, 220, 233.08, 246.94, 261.63, 293.66];
-      const base = scale[((n % 12) + 12) % 12] * 0.5; const t = this.ctx.currentTime;
-      this.oscs.forEach(o => o.frequency.setTargetAtTime(base * o._r, t, 1.4));
-    },
     blip(freq, dur = 0.12, type = 'sine', vol = 0.1, when = 0) {
-      if (!this.ctx || !state.sound) return;
+      if (!this.ctx || !state.sound || !state.vol.sfx) return;
       const c = this.ctx, t = c.currentTime + when, o = c.createOscillator(), g = c.createGain();
       o.type = type; o.frequency.setValueAtTime(freq, t);
       g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.012); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      o.connect(g); g.connect(this.master); o.start(t); o.stop(t + dur + 0.05);
+      o.connect(g); g.connect(this.sfxBus); o.start(t); o.stop(t + dur + 0.05);
     },
     noise(dur = 0.5, from = 400, to = 3000, vol = 0.06) {
-      if (!this.ctx || !state.sound) return;
+      if (!this.ctx || !state.sound || !state.vol.sfx) return;
       const c = this.ctx, n = Math.floor(c.sampleRate * dur), buf = c.createBuffer(1, n, c.sampleRate), d = buf.getChannelData(0);
       for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
       const s = c.createBufferSource(); s.buffer = buf; const f = c.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 1.2;
       const t = c.currentTime; f.frequency.setValueAtTime(from, t); f.frequency.exponentialRampToValueAtTime(to, t + dur);
-      const g = c.createGain(); g.gain.value = vol; s.connect(f); f.connect(g); g.connect(this.master); s.start(t);
+      const g = c.createGain(); g.gain.value = vol; s.connect(f); f.connect(g); g.connect(this.sfxBus); s.start(t);
     },
     sfx(name) {
       switch (name) {
-        case 'tick': this.blip(1046.5, 0.05, 'sine', 0.05); break;
+        case 'tick': this.blip(880, 0.04, 'sine', 0.035); break;
+        case 'type': this.blip(392, 0.035, 'sine', 0.018); break;
         case 'select': this.blip(659.25, 0.09, 'triangle', 0.07); break;
         case 'ok': case 'success': [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => this.blip(f, 0.4, 'triangle', 0.08, i * 0.07)); break;
         case 'bad': case 'fail': this.blip(155.56, 0.28, 'sawtooth', 0.045); this.blip(146.83, 0.32, 'sawtooth', 0.035, 0.06); break;
@@ -163,6 +164,52 @@
         default: this.blip(660, 0.08, 'sine', 0.06);
       }
     },
+  };
+
+  /* ------------------------------------------------------------------ soundtrack: one ElevenLabs loop per place, loaded on demand */
+  const Music = {
+    want: null, cur: null, cache: {}, manifest: null,
+    tracks() {
+      if (!this.manifest) this.manifest = fetch('audio/tracks.json').then(r => (r.ok ? r.json() : {})).catch(() => ({}));
+      return this.manifest;
+    },
+    load(id) {
+      if (this.cache[id]) return this.cache[id];
+      const p = (async () => {
+        const t = (await this.tracks())[id];
+        if (!t || !Sound.ctx) return null;
+        const res = await fetch('audio/' + t.file);
+        if (!res.ok) return null;
+        const ab = await res.arrayBuffer();
+        const buf = await new Promise((ok, bad) => { const r = Sound.ctx.decodeAudioData(ab, ok, bad); if (r && r.then) r.then(ok, bad); });
+        // the file wraps `pad` seconds of the loop around each end, so the loop points sit inside continuous audio;
+        // if a browser leaves the MP3 decoder delay in, shift by it (the padding absorbs any small error)
+        const pad = t.pad || 0, lead = buf.duration - (t.loop + 2 * pad) > 0.02 ? 1105 / 44100 : 0;
+        const start = pad + lead;
+        return { buf, start, end: start + t.loop };
+      })().catch(() => null);
+      this.cache[id] = p;
+      return p;
+    },
+    play(id) { this.want = id; this.kick(); },
+    async kick() {
+      const id = this.want, c = Sound.ctx;
+      if (!id || !c || !state.vol.music || (this.cur && this.cur.id === id)) return;
+      const tr = await this.load(id);
+      if (!tr || this.want !== id || (this.cur && this.cur.id === id)) return;
+      const now = c.currentTime;
+      const src = c.createBufferSource(); src.buffer = tr.buf; src.loop = true; src.loopStart = tr.start; src.loopEnd = tr.end;
+      const g = c.createGain(); g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(1, now + 1.6);
+      src.connect(g); g.connect(Sound.musicBus); src.start(now, tr.start);
+      const old = this.cur; this.cur = { id, src, g };
+      if (old) {
+        old.g.gain.cancelScheduledValues(now); old.g.gain.setValueAtTime(old.g.gain.value, now); old.g.gain.linearRampToValueAtTime(0, now + 1.5);
+        setTimeout(() => { try { old.src.stop(); old.src.disconnect(); } catch (e) { /* already stopped */ } }, 1800);
+      }
+      // keep at most the map theme and the current island decoded
+      for (const k of Object.keys(this.cache)) if (k !== id && k !== 'map') delete this.cache[k];
+    },
+    duck(on) { Sound.ducked = on; Sound.mix(0.35); },
   };
 
   /* ------------------------------------------------------------------ sky */
@@ -230,7 +277,7 @@
     show(text, opts, gen) {
       return new Promise(res => {
         if (gen !== this.gen) return; // cancelled
-        narrEl.classList.add('show'); this.syncH();
+        narrEl.classList.add('show'); this.syncH(); Music.duck(true);
         this.who.textContent = opts.who || '镜灵';
         const wait = opts.wait !== false;
         this.go.hidden = !wait; this.go.textContent = opts.button || '继续 ▸';
@@ -240,13 +287,13 @@
         if (reduced || opts.instant || raw.length < 2) { this.txt.innerHTML = full; this.typing = null; if (!wait) res(true); }
         else {
           let i = 0; this.txt.textContent = '';
-          iv = setInterval(() => { if (gen !== this.gen) { clearInterval(iv); this.typing = null; return; } i += 1; this.txt.textContent = raw.slice(0, i); if (i % 3 === 0) Sound.sfx('tick'); if (i >= raw.length) finish(); }, 26);
+          iv = setInterval(() => { if (gen !== this.gen) { clearInterval(iv); this.typing = null; return; } i += 1; this.txt.textContent = raw.slice(0, i); if (i % 4 === 0) Sound.sfx('type'); if (i >= raw.length) finish(); }, 26);
           this.typing = finish;
         }
         if (wait) this.resolve = v => { if (gen === this.gen) res(v); };
       });
     },
-    hide() { narrEl.classList.remove('show'); this.syncH(); },
+    hide() { narrEl.classList.remove('show'); this.syncH(); Music.duck(false); },
     clear() { this.gen += 1; this.resolve = null; if (this.typing) { const t = this.typing; this.typing = null; try { t(); } catch (e) { } } this.queue = Promise.resolve(); this.hide(); },
   };
 
@@ -296,9 +343,50 @@
     const nCards = Object.keys(state.cards).length, total = allCards().length;
     if (hudMode !== 'codex') right.append(el('button', { class: 'hbtn', type: 'button', html: `${ICON.book}<span class="lbl">图鉴</span><span class="n">${nCards}/${total}</span>`, onclick: () => go('codex') }));
     else right.append(el('button', { class: 'hbtn', type: 'button', html: `${ICON.map}<span class="lbl">群岛</span>`, onclick: () => go('map') }));
-    right.append(el('button', { class: 'hbtn', type: 'button', 'aria-label': state.sound ? '关闭声音' : '打开声音', html: state.sound ? ICON.snd : ICON.mute, onclick: () => Sound.set(!state.sound) }));
+    const audible = state.sound && (state.vol.music > 0 || state.vol.sfx > 0);
+    right.append(el('button', { class: 'hbtn snd', type: 'button', 'aria-label': '声音设置', 'aria-haspopup': 'dialog', 'aria-expanded': String(!!volEl), html: audible ? ICON.snd : ICON.mute, onclick: e => toggleVol(e) }));
     hud.append(left, mid, right);
   }
+
+  /* ------------------------------------------------------------------ sound panel: master switch, music and effects levels */
+  let volEl = null;
+  function toggleVol(e) {
+    if (volEl) { closeVol(); return; }
+    const pct = v => Math.round(v * 100) + '%';
+    const sw = el('button', { class: 'sw', type: 'button', role: 'switch', 'aria-label': '声音', onclick: () => Sound.set(!state.sound) });
+    const slider = (key, label) => {
+      const out = el('output', { text: pct(state.vol[key]) });
+      const r = el('input', { type: 'range', min: '0', max: '100', step: '1', value: String(Math.round(state.vol[key] * 100)), 'aria-label': label });
+      const paint = () => r.style.setProperty('--p', r.value + '%');
+      r.addEventListener('input', () => {
+        state.vol[key] = r.value / 100; out.textContent = pct(state.vol[key]); paint();
+        if (!state.sound && state.vol[key] > 0) Sound.set(true);   // raising a level means "let me hear it"
+        else renderHud();
+        Sound.mix(0.04); if (key === 'music') Music.kick();
+      });
+      r.addEventListener('change', () => { save(); if (key === 'sfx') Sound.sfx('select'); });
+      paint();
+      return el('label', { class: 'row' }, el('span', { text: label }), r, out);
+    };
+    volEl = el('div', { class: 'vol', role: 'dialog', 'aria-label': '声音设置' },
+      el('div', { class: 'head' }, el('span', { text: 'SOUND · 声音' }), sw),
+      slider('music', '音乐'), slider('sfx', '音效'));
+    document.body.append(volEl);
+    syncVol(); renderHud();
+    if (e && e.detail === 0) volEl.querySelector('input').focus();   // opened from the keyboard
+  }
+  function syncVol() {
+    if (!volEl) return;
+    volEl.classList.toggle('off', !state.sound);
+    volEl.querySelector('.sw').setAttribute('aria-checked', String(!!state.sound));
+  }
+  function closeVol(refocus) {
+    if (!volEl) return;
+    volEl.remove(); volEl = null; save(); renderHud();
+    if (refocus) { const b = hud && hud.querySelector('.hbtn.snd'); if (b) b.focus(); }
+  }
+  document.addEventListener('pointerdown', e => { if (volEl && !volEl.contains(e.target) && !e.target.closest('.hbtn.snd')) closeVol(); }, true);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && volEl) closeVol(true); });
 
   /* ------------------------------------------------------------------ navigation */
   function setHash(h) { try { history.replaceState(null, '', '#' + h); } catch (e) { /* ignore */ } }
@@ -463,7 +551,7 @@
   function enterLevel(id) {
     const def = levels.get(id); if (!def) { showMap(); return; }
     teardown(); hudMode = 'level'; hudLevel = id; hudSteps = [0, def.steps || 0]; renderHud();
-    setHash(id); Sound.root(def.no || 0); Sound.sfx('open');
+    setHash(id); Music.play(id); Sound.sfx('open');
     const hue = HUES[id] != null ? HUES[id] : 42; document.documentElement.style.setProperty('--hue', hue); Sky.tint = hue;
     const root = el('div', { class: 'level-root gutter lv-' + id, style: `--hue:${hue}` });
     stage.append(root);
@@ -481,7 +569,7 @@
 
   /* ------------------------------------------------------------------ screens: title */
   function showTitle() {
-    teardown(); hudMode = 'title'; renderHud(); setHash('start');
+    teardown(); hudMode = 'title'; renderHud(); setHash('start'); Music.play('map');
     const scr = el('div', { class: 'screen title-screen gutter' });
     const cv = el('canvas', { 'aria-hidden': 'true' });
     const started = doneCount() > 0 || Object.keys(state.cards).length > 0;
@@ -541,7 +629,7 @@
 
   /* ------------------------------------------------------------------ screens: map */
   function showMap(justDone) {
-    teardown(); hudMode = 'map'; hudLevel = null; renderHud(); setHash('map'); Sound.root(7);
+    teardown(); hudMode = 'map'; hudLevel = null; renderHud(); setHash('map'); Music.play('map');
     const scr = el('div', { class: 'screen map-screen' });
     const wrap = el('div', { class: 'map-wrap' });
     scr.append(wrap); stage.append(scr);
@@ -674,7 +762,7 @@
 
   /* ------------------------------------------------------------------ screens: codex */
   function showCodex() {
-    teardown(); hudMode = 'codex'; renderHud(); setHash('codex');
+    teardown(); hudMode = 'codex'; renderHud(); setHash('codex'); Music.play('map');
     const scr = el('div', { class: 'screen codex gutter' });
     const all = allCards(), n = all.filter(c => state.cards[c.id]).length;
     scr.append(el('div', { class: 'codex-head' }, el('div', null, el('h2', { text: '光谱图鉴' }), el('p', { text: `每穿过一面透镜，你会照见一些概念。已收集 ${n} / ${all.length}。` }))));
@@ -722,21 +810,21 @@
     Narr.build(); Sky.init();
     const h = (location.hash || '').slice(1);
     // first user gesture unlocks audio
-    const unlock = () => { if (state.sound) Sound.set(true); removeEventListener('pointerdown', unlock); removeEventListener('keydown', unlock); };
+    const unlock = () => { if (state.sound) Sound.apply(); removeEventListener('pointerdown', unlock); removeEventListener('keydown', unlock); };
     addEventListener('pointerdown', unlock); addEventListener('keydown', unlock);
     if (levels.has(h) && h !== 'fin') enterLevel(h);
     else if (h === 'map') showMap();
     else if (h === 'codex') showCodex();
     else showTitle();
   }
-  function reset() { state = { v: 1, done: {}, cards: {}, sound: state.sound, intro: false }; save(); showTitle(); }
+  function reset() { state = { v: 1, done: {}, cards: {}, sound: state.sound, vol: state.vol, intro: false }; save(); showTitle(); }
 
   window.Lens = {
     registerLevel, boot, go, reset,
     ORDER, HUES, META, BRIDGES, CONT,
     get state() { return state; },
     util: { el, esc, fmt, clamp, lerp, hsl, lensPath, PRISM_SVG },
-    sound: Sound, narr: Narr,
+    sound: Sound, music: Music, narr: Narr,
     levelDefs: () => ORDER.map(id => levels.get(id)).filter(Boolean),
     _complete: id => { const d = levels.get(id); if (d) completeLevel(d, {}); },
   };
